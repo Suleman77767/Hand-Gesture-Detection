@@ -1,94 +1,92 @@
 import streamlit as st
 import cv2
-import mediapipe as mp
 import numpy as np
+from ultralytics import YOLO
+import easyocr
 
-st.set_page_config(page_title="Hand Gesture Detection", layout="centered")
+st.title("🚗 Advanced Number Plate Detection (ANPR)")
 
-st.title("🤚 Real-Time Hand Gesture Detection")
+st.write("Upload video and search vehicle number plate")
 
-run = st.checkbox("Start Camera")
+# Input
+target_plate = st.text_input("Enter Plate Number to Search (e.g. ABC123)")
 
-mp_hands = mp.solutions.hands
-mp_draw = mp.solutions.drawing_utils
+video_file = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
-# Function to detect basic gesture
-def detect_gesture(hand_landmarks):
-    tips = [8, 12, 16, 20]   # finger tips
-    fingers = []
+# Load models
+@st.cache_resource
+def load_models():
+    yolo = YOLO("yolov8n.pt")  # general model (can be replaced with custom plate model)
+    reader = easyocr.Reader(['en'])
+    return yolo, reader
 
-    # Thumb (simple check)
-    if hand_landmarks.landmark[4].x < hand_landmarks.landmark[3].x:
-        fingers.append(1)
+yolo_model, ocr_reader = load_models()
+
+def read_plate(crop):
+    result = ocr_reader.readtext(crop)
+    text = ""
+
+    for r in result:
+        text += r[1] + " "
+
+    return text.strip()
+
+def detect_plate(frame):
+    results = yolo_model(frame)
+
+    plates = []
+
+    for r in results:
+        for box in r.boxes.xyxy:
+            x1, y1, x2, y2 = map(int, box)
+
+            crop = frame[y1:y2, x1:x2]
+
+            if crop.size == 0:
+                continue
+
+            text = read_plate(crop)
+
+            plates.append((text, (x1, y1, x2, y2)))
+
+    return plates
+
+if video_file:
+
+    file_bytes = np.asarray(bytearray(video_file.read()), dtype=np.uint8)
+    video = cv2.VideoCapture(cv2.imdecode(file_bytes, cv2.IMREAD_COLOR))
+
+    stframe = st.empty()
+
+    found = False
+
+    while True:
+        ret, frame = video.read()
+        if not ret:
+            break
+
+        plates = detect_plate(frame)
+
+        for text, (x1, y1, x2, y2) in plates:
+
+            # draw box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            cv2.putText(frame, text[:15], (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (0, 255, 0), 2)
+
+            # match search
+            if target_plate and target_plate.lower() in text.lower():
+                found = True
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                cv2.putText(frame, "MATCH FOUND", (x1, y2 + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                            (0, 0, 255), 2)
+
+        stframe.image(frame, channels="BGR")
+
+    if found:
+        st.success("Vehicle Found in Video!")
     else:
-        fingers.append(0)
-
-    # Other fingers
-    for tip in tips:
-        if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[tip - 2].y:
-            fingers.append(1)
-        else:
-            fingers.append(0)
-
-    total = fingers.count(1)
-
-    if total == 5:
-        return "Open Palm ✋"
-    elif total == 0:
-        return "Fist ✊"
-    elif total == 2:
-        return "Victory ✌️"
-    elif total == 1:
-        return "Pointing ☝️"
-    else:
-        return "Unknown Gesture"
-
-frame_placeholder = st.empty()
-
-cap = None
-
-if run:
-    cap = cv2.VideoCapture(0)
-
-    with mp_hands.Hands(
-        min_detection_confidence=0.7,
-        min_tracking_confidence=0.7
-    ) as hands:
-
-        while run:
-            success, frame = cap.read()
-            if not success:
-                st.error("Camera not detected")
-                break
-
-            frame = cv2.flip(frame, 1)
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            results = hands.process(rgb)
-
-            gesture_text = "No Hand Detected"
-
-            if results.multi_hand_landmarks:
-                for handLms in results.multi_hand_landmarks:
-                    mp_draw.draw_landmarks(
-                        frame,
-                        handLms,
-                        mp_hands.HAND_CONNECTIONS
-                    )
-
-                    gesture_text = detect_gesture(handLms)
-
-            cv2.putText(
-                frame,
-                gesture_text,
-                (20, 50),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 255, 0),
-                2
-            )
-
-            frame_placeholder.image(frame, channels="BGR")
-
-    if cap:
-        cap.release()
+        st.warning("No matching plate detected.")
