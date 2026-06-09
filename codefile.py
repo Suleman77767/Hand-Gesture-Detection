@@ -1,9 +1,9 @@
 import streamlit as st
+import cv2
 import mediapipe as mp
 
-st.write("MediaPipe Version:", mp.__version__)
+st.title("Hand Gesture Detection App")
 
-try:
-    st.write("Solutions Found:", hasattr(mp, "solutions"))
-except Exception as e:
-    st.error(str(e))
+st.write("OpenCV:", cv2.__version__)
+st.write("MediaPipe:", mp.__version__)
+st.write("Status: OK")
