@@ -1,51 +1,36 @@
 import streamlit as st
 import cv2
 import numpy as np
-import pytesseract
-from PIL import Image
+import easyocr
 
 st.set_page_config(page_title="ANPR System", layout="centered")
 
-st.title("🚗 License Plate Detection System (Stable Version)")
+st.title("🚗 License Plate Detection & Recognition System")
 
-# Input plate
-target_plate = st.text_input("Enter Number Plate to Search (e.g. ABC123)")
+st.write("Upload video and search for a number plate")
+
+# User input
+target_plate = st.text_input("Enter Number Plate (e.g. ABC123)")
 
 # Upload video
 video_file = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
+# Load EasyOCR once
+@st.cache_resource
+def load_reader():
+    return easyocr.Reader(['en'])
+
+reader = load_reader()
+
 # OCR function
-def extract_text(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+def read_text(frame):
+    result = reader.readtext(frame)
+    text = ""
 
-    # noise reduction
-    gray = cv2.bilateralFilter(gray, 11, 17, 17)
-
-    # threshold for better OCR
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-
-    text = pytesseract.image_to_string(thresh)
+    for r in result:
+        text += r[1] + " "
 
     return text.strip()
-
-# simple "plate region simulation"
-def find_plate_regions(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 100, 200)
-
-    contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-    plates = []
-
-    for c in contours:
-        x, y, w, h = cv2.boundingRect(c)
-
-        # filter likely plate region
-        if w > 80 and h > 20 and w < 300 and h < 120:
-            crop = frame[y:y+h, x:x+w]
-            plates.append((crop, (x, y, w, h)))
-
-    return plates
 
 if video_file:
 
@@ -61,35 +46,29 @@ if video_file:
         if not ret:
             break
 
-        plates = find_plate_regions(frame)
+        # resize for speed
+        frame = cv2.resize(frame, (720, 420))
 
-        detected_text = ""
+        # OCR directly on frame (no contour detection)
+        text = read_text(frame)
 
-        for crop, (x, y, w, h) in plates:
+        # draw detected text
+        cv2.putText(frame, text[:40], (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8,
+                    (0, 255, 0), 2)
 
-            text = extract_text(crop)
+        # match plate
+        if target_plate and target_plate.lower() in text.lower():
+            found = True
 
-            detected_text += text + " "
-
-            # draw box
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-
-            cv2.putText(frame, text[:15], (x, y-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                        (0, 255, 0), 2)
-
-            # match search
-            if target_plate and target_plate.lower() in text.lower():
-                found = True
-
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 3)
-                cv2.putText(frame, "MATCH FOUND", (x, y+h+20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                            (0, 0, 255), 2)
+            cv2.rectangle(frame, (50, 50), (650, 350), (0, 0, 255), 3)
+            cv2.putText(frame, "MATCH FOUND", (50, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (0, 0, 255), 3)
 
         stframe.image(frame, channels="BGR")
 
     if found:
         st.success("🚗 Vehicle Found in Video!")
     else:
-        st.warning("No matching number plate found.")
+        st.warning("No matching number plate detected.")
